@@ -23,8 +23,8 @@ CACHE_TTL = 300  # 5 phút
 CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")
 
 # --- GIỮ NGUYÊN PHẦN PLAYWRIGHT CỦA BẠN ---
-async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
-    cache_key = f"{query}_{cx}"
+async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Dict]:
+    cache_key = f"{query}_{cx}_{offset}"
     
     if cache_key in cache:
         cached_data = cache[cache_key]
@@ -65,6 +65,21 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
                 return []
 
             await asyncio.sleep(3)
+            
+            # 🟢 XỬ LÝ PAGINATION (NẾU OFFSET > 0)
+            if offset > 0:
+                try:
+                    # Render Google CSE thường có nút "Next" ở cuối trang
+                    # Chúng ta thử click vào nó và đợi kết quả mới load
+                    next_button = await page.query_selector('.gsc-clear-button + div a:last-child, .gsc-pagination-button')
+                    if next_button:
+                        await next_button.click()
+                        await asyncio.sleep(3) # Đợi trang mới load
+                    else:
+                        print("Không tìm thấy nút Next, chỉ lấy trang hiện tại.")
+                except:
+                    pass # Không tìm thấy nút next thì thôi, lấy trang hiện tại
+
             try:
                 await page.wait_for_selector(".gsc-result, .gs-result, .gsc-webResult", timeout=15000)
             except:
@@ -120,18 +135,27 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
             
             await browser.close()
             
+            # 🟢 LỌC BỎ KẾT QUẢ TRÙNG LẶP TRƯỚC KHI LƯU CACHE
+            seen_links = set()
+            unique_results = []
+            for item in results:
+                link = item.get('link', '')
+                if link and link not in seen_links:
+                    unique_results.append(item)
+                    seen_links.add(link)
+            
             cache[cache_key] = {
                 "timestamp": time.time(),
-                "results": results
+                "results": unique_results
             }
-            return results
+            return unique_results
             
     except Exception as e:
         print(f"CRITICAL ERROR fetching results: {e}")
         return []
 
 # --- HÀM MỚI: CHUYỂN ĐỔI SANG FORMAT GIỐNG BRAVE ---
-def transform_to_brave_format(query: str, web_results: List[Dict]) -> Dict[str, Any]:
+def transform_to_brave_format(query: str, web_results: List[Dict], offset: int = 0) -> Dict[str, Any]:
     # Tạo cấu trúc metadata query y hệt Brave
     brave_query = {
         "original": query,
@@ -145,7 +169,7 @@ def transform_to_brave_format(query: str, web_results: List[Dict]) -> Dict[str, 
         "postal_code": "",
         "city": "",
         "header_country": "",
-        "more_results_available": len(web_results) >= 20, # Giả lập (vì CSE chỉ trả 1 trang)
+        "more_results_available": len(web_results) >= 20,
         "state": ""
     }
 
@@ -169,13 +193,13 @@ def transform_to_brave_format(query: str, web_results: List[Dict]) -> Dict[str, 
             "url": r.get("link", ""),
             "is_source_local": False,
             "is_source_both": False,
-            "description": r.get("snippet", ""), # Brave dùng "description"
-            "page_age": None,     # Không có từ Google
+            "description": r.get("snippet", ""),
+            "page_age": None,
             "profile": {
                 "name": r.get("display_url", "").replace("www.", "").split(".")[0] if r.get("display_url") else "",
                 "url": r.get("link", ""),
                 "long_name": r.get("display_url", ""),
-                "img": None       # Không có favicon
+                "img": None
             },
             "language": "en",
             "family_friendly": True,
@@ -194,21 +218,19 @@ def transform_to_brave_format(query: str, web_results: List[Dict]) -> Dict[str, 
             "deep_results": None
         })
 
-    # Tạo cấu trúc web chính
     brave_web = {
         "type": "search",
         "results": brave_web_results,
         "family_friendly": True
     }
 
-    # Ghép vào JSON chung
     return {
         "type": "search",
         "query": brave_query,
         "mixed": brave_mixed,
         "videos": {
             "type": "videos",
-            "results": [],      # Bỏ trống vì không có video từ Google CSE
+            "results": [],
             "mutated_by_goggles": False
         },
         "web": brave_web
@@ -227,14 +249,12 @@ async def root():
 @app.get("/search")
 async def search(
     q: str = Query(..., description="Từ khóa tìm kiếm"),
-    cx: str = Query(CX, description="Search Engine ID")
+    cx: str = Query(CX, description="Search Engine ID"),
+    offset: int = Query(0, description="Trang kết quả (0 là trang đầu, 1 là trang tiếp theo)")
 ):
     try:
-        raw_results = await fetch_google_cse(q, cx)
-        
-        # Chuyển đổi dữ liệu sang format Brave
-        brave_style_json = transform_to_brave_format(q, raw_results)
-        
+        raw_results = await fetch_google_cse(q, cx, offset)
+        brave_style_json = transform_to_brave_format(q, raw_results, offset)
         return JSONResponse(brave_style_json)
         
     except Exception as e:

@@ -5,9 +5,9 @@ from playwright.async_api import async_playwright
 import asyncio
 import os
 import time
-from typing import List, Dict
+from typing import List, Dict, Any
 
-app = FastAPI(title="Google CSE Search API", version="1.0")
+app = FastAPI(title="Google CSE Search API (Brave-like Format)")
 
 # CORS cho frontend gọi
 app.add_middleware(
@@ -17,52 +17,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cache đơn giản để giảm tải cho Render
+# Cache
 cache: Dict[str, Dict] = {}
 CACHE_TTL = 300  # 5 phút
-CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")  # Lấy từ env
+CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")
 
+# --- GIỮ NGUYÊN PHẦN PLAYWRIGHT CỦA BẠN ---
 async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
-    """Dùng Playwright lấy kết quả từ Google CSE widget"""
-    
     cache_key = f"{query}_{cx}"
     
-    # 1. Kiểm tra cache
     if cache_key in cache:
         cached_data = cache[cache_key]
         if time.time() - cached_data["timestamp"] < CACHE_TTL:
-            print(f"Returning cached results for: {query}")
             return cached_data["results"]
     
     try:
         async with async_playwright() as p:
-            # 2. Cấu hình Chromium chạy trên Render (Headless)
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',  # Cần thiết cho Render
+                    '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--single-process'
                 ]
             )
-            
             page = await browser.new_page()
-            
-            # 3. Điều hướng trực tiếp đến trang CSE (Tối ưu hơn set_content)
-            print(f"Navigating to Google CSE for query: {query}")
             await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle")
             
-            # 4. Tương tác: Nhập từ khóa và thực hiện tìm kiếm
             try:
-                # Chờ ô input xuất hiện
                 await page.wait_for_selector(".gsc-input input", timeout=10000)
-                
-                # Nhập từ khóa
                 await page.fill(".gsc-input input", query)
                 
-                # Thử click nút tìm kiếm (Google thường dùng button dạng này)
                 search_clicked = False
                 try:
                     await page.click(".gsc-search-button-v2 button")
@@ -70,37 +57,29 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
                 except:
                     pass
                 
-                # Nếu không click được nút, thử gửi phím Enter
                 if not search_clicked:
                     await page.press(".gsc-input input", "Enter")
-                
             except Exception as e:
                 print(f"Search input error: {e}")
                 await browser.close()
                 return []
 
-            # 5. Đợi kết quả load
-            await asyncio.sleep(3) # Thời gian đệm để Google render DOM
+            await asyncio.sleep(3)
             try:
-                # Chờ ít nhất một kết quả hiện ra
                 await page.wait_for_selector(".gsc-result, .gs-result, .gsc-webResult", timeout=15000)
             except:
-                pass # Không có kết quả cũng không crash server
+                pass
 
-            # 6. Trích xuất dữ liệu (Dùng Selector bền vững nhất)
             results = await page.evaluate('''
                 () => {
                     const items = [];
-                    // Lấy tất cả thẻ div kết quả
                     const elements = document.querySelectorAll('.gsc-webResult, .gs-webResult');
                     
                     elements.forEach(el => {
-                        // Lấy đường dẫn
                         let link = '';
                         const linkEl = el.querySelector('.gs-title a');
                         if (linkEl) {
                             link = linkEl.href;
-                            // Xử lý link redirect của Google
                             if (link.startsWith('/url?q=')) {
                                 try {
                                     link = decodeURIComponent(link.split('/url?q=')[1].split('&')[0]);
@@ -110,7 +89,6 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
                             }
                         }
 
-                        // Lấy tiêu đề
                         let title = '';
                         const titleEl = el.querySelector('.gs-title');
                         if (titleEl) {
@@ -119,12 +97,10 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
                             title = linkEl.innerText.trim();
                         }
 
-                        // Lấy đoạn mô tả
                         let snippet = '';
                         const snippetEl = el.querySelector('.gs-snippet');
                         if (snippetEl) snippet = snippetEl.innerText.trim();
 
-                        // Lấy URL hiển thị
                         let display_url = '';
                         const urlEl = el.querySelector('.gs-visibleUrl');
                         if (urlEl) display_url = urlEl.innerText.trim();
@@ -138,35 +114,113 @@ async def fetch_google_cse(query: str, cx: str = CX) -> List[Dict]:
                             });
                         }
                     });
-                    
                     return items;
                 }
             ''')
             
             await browser.close()
             
-            # 7. Lưu cache
             cache[cache_key] = {
                 "timestamp": time.time(),
                 "results": results
             }
-            print(f"Found {len(results)} results for: {query}")
-            
             return results
             
     except Exception as e:
         print(f"CRITICAL ERROR fetching results: {e}")
-        return [] # Trả về rỗng thay vì crash server nếu gặp lỗi
+        return []
+
+# --- HÀM MỚI: CHUYỂN ĐỔI SANG FORMAT GIỐNG BRAVE ---
+def transform_to_brave_format(query: str, web_results: List[Dict]) -> Dict[str, Any]:
+    # Tạo cấu trúc metadata query y hệt Brave
+    brave_query = {
+        "original": query,
+        "show_strict_warning": False,
+        "is_navigational": False,
+        "is_news_breaking": False,
+        "spellcheck_off": False,
+        "country": "us",
+        "bad_results": False,
+        "should_fallback": False,
+        "postal_code": "",
+        "city": "",
+        "header_country": "",
+        "more_results_available": len(web_results) >= 20, # Giả lập (vì CSE chỉ trả 1 trang)
+        "state": ""
+    }
+
+    # Tạo mục mixed (đánh index)
+    mixed_main = []
+    for idx in range(len(web_results)):
+        mixed_main.append({"type": "web", "index": idx, "all": False})
+
+    brave_mixed = {
+        "type": "mixed",
+        "main": mixed_main,
+        "top": [],
+        "side": []
+    }
+
+    # Format lại từng kết quả web cho khớp Brave
+    brave_web_results = []
+    for r in web_results:
+        brave_web_results.append({
+            "title": r.get("title", ""),
+            "url": r.get("link", ""),
+            "is_source_local": False,
+            "is_source_both": False,
+            "description": r.get("snippet", ""), # Brave dùng "description"
+            "page_age": None,     # Không có từ Google
+            "profile": {
+                "name": r.get("display_url", "").replace("www.", "").split(".")[0] if r.get("display_url") else "",
+                "url": r.get("link", ""),
+                "long_name": r.get("display_url", ""),
+                "img": None       # Không có favicon
+            },
+            "language": "en",
+            "family_friendly": True,
+            "type": "search_result",
+            "subtype": "generic",
+            "is_live": False,
+            "meta_url": {
+                "scheme": "https",
+                "netloc": r.get("display_url", ""),
+                "hostname": r.get("display_url", ""),
+                "favicon": None,
+                "path": ""
+            },
+            "thumbnail": None,
+            "age": None,
+            "deep_results": None
+        })
+
+    # Tạo cấu trúc web chính
+    brave_web = {
+        "type": "search",
+        "results": brave_web_results,
+        "family_friendly": True
+    }
+
+    # Ghép vào JSON chung
+    return {
+        "type": "search",
+        "query": brave_query,
+        "mixed": brave_mixed,
+        "videos": {
+            "type": "videos",
+            "results": [],      # Bỏ trống vì không có video từ Google CSE
+            "mutated_by_goggles": False
+        },
+        "web": brave_web
+    }
+
 
 @app.get("/")
 async def root():
-    """Trang chủ"""
     return {
-        "message": "Google CSE Search API",
+        "message": "Google CSE Search API (Brave-like JSON Format)",
         "endpoints": {
             "/search?q=query": "Tìm kiếm",
-            "/health": "Kiểm tra sức khỏe",
-            "/clear-cache": "Xóa cache"
         }
     }
 
@@ -175,15 +229,14 @@ async def search(
     q: str = Query(..., description="Từ khóa tìm kiếm"),
     cx: str = Query(CX, description="Search Engine ID")
 ):
-    """API tìm kiếm qua Google CSE"""
     try:
-        results = await fetch_google_cse(q, cx)
-        return JSONResponse({
-            "query": q,
-            "total": len(results),
-            "results": results,
-            "status": "success"
-        })
+        raw_results = await fetch_google_cse(q, cx)
+        
+        # Chuyển đổi dữ liệu sang format Brave
+        brave_style_json = transform_to_brave_format(q, raw_results)
+        
+        return JSONResponse(brave_style_json)
+        
     except Exception as e:
         return JSONResponse({
             "error": str(e),
@@ -194,7 +247,6 @@ async def search(
 
 @app.get("/health")
 async def health():
-    """Kiểm tra trạng thái server"""
     return {
         "status": "ok",
         "cache_size": len(cache),
@@ -203,11 +255,9 @@ async def health():
 
 @app.get("/clear-cache")
 async def clear_cache():
-    """Xóa cache thủ công"""
     cache.clear()
     return {"status": "cache cleared"}
 
-# Chạy server
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)

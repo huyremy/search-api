@@ -44,7 +44,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 ]
             )
             
-            # Thêm header và User-Agent chuẩn như trình duyệt thật để bypass 404
             page = await browser.new_page(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -61,30 +60,48 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 "Upgrade-Insecure-Requests": "1"
             })
             
-            # Giữ link gốc cse.google.com (vì link này chạy phe phé trên tay)
             print(f"   - Navigating to Google CSE (cx: {cx})...")
             await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
             
+            # 🟢 TỰ ĐỘNG TÌM INPUT BẰNG NHIỀU CÁCH (Fallback)
+            search_input = None
             try:
-                await page.wait_for_selector(".gsc-input input", timeout=15000)
-                await page.type(".gsc-input input", query, delay=random.randint(50, 150))
-                await asyncio.sleep(2)
-                
-                await page.press(".gsc-input input", "Enter")
-                
-                await asyncio.sleep(1)
-                await page.evaluate('''
-                    const input = document.querySelector('.gsc-input input');
-                    if (input) {
-                        input.form.submit();
-                    }
-                ''')
-                
-            except Exception as e:
-                print(f"❌ Search input error! {e}")
+                # Cách 1: Tìm theo ID động (Thường gặp nhất trên CSE mới)
+                search_input = await page.wait_for_selector("input.gsc-i-id1, input#gsc-i-id1", timeout=5000)
+            except:
+                try:
+                    # Cách 2: Tìm theo Class truyền thống
+                    search_input = await page.wait_for_selector(".gsc-input input", timeout=5000)
+                except:
+                    try:
+                        # Cách 3: Tìm theo Name (Luôn có)
+                        search_input = await page.wait_for_selector("input[name='search']", timeout=5000)
+                    except:
+                        # Cách 4: Tìm bất kỳ input nào trong form tìm kiếm
+                        search_input = await page.wait_for_selector("form.gsc-search-box input[type='text']", timeout=5000)
+            
+            if not search_input:
+                print("❌ Could not find search input after trying multiple selectors!")
                 await browser.close()
                 return []
 
+            # Nhập từ khóa
+            await search_input.type(query, delay=random.randint(50, 150))
+            await asyncio.sleep(2)
+            
+            # Gửi Enter
+            await page.press("input.gsc-i-id1, .gsc-input input, input[name='search']", "Enter")
+            
+            # Trigger JS submit
+            await asyncio.sleep(1)
+            await page.evaluate('''
+                const input = document.querySelector('input.gsc-i-id1, .gsc-input input, input[name="search"]');
+                if (input) {
+                    const form = input.closest('form');
+                    if (form) form.submit();
+                }
+            ''')
+                
             await asyncio.sleep(6)
             
             if offset > 0:

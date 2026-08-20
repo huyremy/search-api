@@ -44,26 +44,34 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 ]
             )
             
+            # Thêm header và User-Agent chuẩn như trình duyệt thật để bypass 404
             page = await browser.new_page(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
+            await page.set_extra_http_headers({
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            })
             
-            # 🟢 QUAN TRỌNG NHẤT: SỬA LINK NÀY!
-            # Link cũ: https://cse.google.com/cse?cx=...  -> Bị 404
-            # Link mới: https://www.google.com/cse?cx=...
-            await page.goto(f"https://www.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
+            # Giữ link gốc cse.google.com (vì link này chạy phe phé trên tay)
+            print(f"   - Navigating to Google CSE (cx: {cx})...")
+            await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
             
             try:
-                # Chờ ô input xuất hiện
                 await page.wait_for_selector(".gsc-input input", timeout=15000)
-                
                 await page.type(".gsc-input input", query, delay=random.randint(50, 150))
                 await asyncio.sleep(2)
                 
-                # Gửi phím Enter
                 await page.press(".gsc-input input", "Enter")
                 
-                # Trigger thêm bằng JS
                 await asyncio.sleep(1)
                 await page.evaluate('''
                     const input = document.querySelector('.gsc-input input');
@@ -77,7 +85,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 await browser.close()
                 return []
 
-            # Đợi kết quả load
             await asyncio.sleep(6)
             
             if offset > 0:
@@ -138,7 +145,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 }
             ''')
             
-            # 🚨 Nếu không có kết quả, in toàn bộ HTML ra Log để debug
             if len(results) == 0:
                 print("⚠️ DEBUG: 0 RESULTS FOUND. DUMPING HTML PAGE CONTENT BELOW:")
                 html_content = await page.content()

@@ -48,29 +48,27 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             
-            # Chờ network idle để chắc chắn load xong web CSE
-            await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
+            # 🟢 QUAN TRỌNG NHẤT: SỬA LINK NÀY!
+            # Link cũ: https://cse.google.com/cse?cx=...  -> Bị 404
+            # Link mới: https://www.google.com/cse?cx=...
+            await page.goto(f"https://www.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
             
             try:
                 # Chờ ô input xuất hiện
                 await page.wait_for_selector(".gsc-input input", timeout=15000)
                 
-                # Gõ chữ từng ký tự (như người dùng)
                 await page.type(".gsc-input input", query, delay=random.randint(50, 150))
-                
-                # Chờ một chút trước khi gửi lệnh tìm kiếm
                 await asyncio.sleep(2)
                 
-                # Cách 1: Gửi phím Enter
-                print("   - Pressing Enter inside search box...")
+                # Gửi phím Enter
                 await page.press(".gsc-input input", "Enter")
                 
-                # Cách 2: Dùng JS để trigger thêm
+                # Trigger thêm bằng JS
                 await asyncio.sleep(1)
                 await page.evaluate('''
                     const input = document.querySelector('.gsc-input input');
                     if (input) {
-                        input.form.submit(); // Gửi form tìm kiếm
+                        input.form.submit();
                     }
                 ''')
                 
@@ -79,7 +77,7 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 await browser.close()
                 return []
 
-            # 🟢 Đợi lâu hơn để Google xử lý kết quả (6 giây)
+            # Đợi kết quả load
             await asyncio.sleep(6)
             
             if offset > 0:
@@ -92,7 +90,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 except:
                     pass
 
-            # 🟢 CHỐT HẠ: Lấy HTML và In ra nếu không có kết quả
             results = await page.evaluate('''
                 () => {
                     const items = [];
@@ -145,7 +142,7 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
             if len(results) == 0:
                 print("⚠️ DEBUG: 0 RESULTS FOUND. DUMPING HTML PAGE CONTENT BELOW:")
                 html_content = await page.content()
-                print(html_content[:3000]) # In 3000 ký tự đầu để đọc được ngay trên Log
+                print(html_content[:3000]) 
                 print("⚠️ DEBUG: END OF HTML DUMP")
             
             await browser.close()

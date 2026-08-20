@@ -5,6 +5,7 @@ from playwright.async_api import async_playwright
 import asyncio
 import os
 import time
+import random
 from typing import List, Dict, Any
 
 app = FastAPI(title="Google CSE Search API (Brave-like Format)")
@@ -19,7 +20,7 @@ app.add_middleware(
 
 # Cache
 cache: Dict[str, Dict] = {}
-CACHE_TTL = 300  # 5 phút
+CACHE_TTL = 300
 CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")
 
 async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Dict]:
@@ -28,7 +29,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
     if cache_key in cache:
         cached_data = cache[cache_key]
         if time.time() - cached_data["timestamp"] < CACHE_TTL:
-            print(f"✅ DEBUG: Cache hit for '{query}'.")
             return cached_data["results"]
     
     try:
@@ -48,65 +48,55 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             
-            print(f"   - Navigating to Google CSE (cx: {cx})...")
-            await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle")
+            # Chờ network idle để chắc chắn load xong web CSE
+            await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle", timeout=30000)
             
             try:
-                # 1. Chờ ô tìm kiếm
-                await page.wait_for_selector(".gsc-input input", timeout=10000)
+                # Chờ ô input xuất hiện
+                await page.wait_for_selector(".gsc-input input", timeout=15000)
                 
-                # 2. Nhập từ khóa
-                await page.fill(".gsc-input input", query)
+                # Gõ chữ từng ký tự (như người dùng)
+                await page.type(".gsc-input input", query, delay=random.randint(50, 150))
                 
-                # 3. Thay vì click button, ta dùng Enter và kích hoạt sự kiện JS
+                # Chờ một chút trước khi gửi lệnh tìm kiếm
+                await asyncio.sleep(2)
+                
+                # Cách 1: Gửi phím Enter
                 print("   - Pressing Enter inside search box...")
                 await page.press(".gsc-input input", "Enter")
                 
-                # 4. Kích hoạt thêm bằng JS để chắc chắn (do Google đổi DOM)
+                # Cách 2: Dùng JS để trigger thêm
+                await asyncio.sleep(1)
                 await page.evaluate('''
                     const input = document.querySelector('.gsc-input input');
                     if (input) {
-                        const event = new KeyboardEvent('keydown', {
-                            key: 'Enter',
-                            code: 'Enter',
-                            which: 13,
-                            keyCode: 13,
-                            bubbles: true
-                        });
-                        input.dispatchEvent(event);
+                        input.form.submit(); // Gửi form tìm kiếm
                     }
                 ''')
-                    
+                
             except Exception as e:
                 print(f"❌ Search input error! {e}")
                 await browser.close()
                 return []
 
-            # 5. Đợi kết quả load
-            await asyncio.sleep(4)
+            # 🟢 Đợi lâu hơn để Google xử lý kết quả (6 giây)
+            await asyncio.sleep(6)
             
             if offset > 0:
                 try:
-                    next_button = await page.query_selector('.gsc-clear-button + div a:last-child, .gsc-pagination-button')
+                    next_button = await page.query_selector('.gsc-pagination-button a, .gsc-clear-button + div a')
                     if next_button:
                         print(f"   - Clicking Next page (offset={offset})...")
                         await next_button.click()
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(4)
                 except:
                     pass
 
-            # 6. Đợi DOM chứa kết quả
-            try:
-                await page.wait_for_selector(".gsc-result, .gs-result, .gsc-webResult", timeout=10000)
-            except:
-                pass
-
-            # 7. Evaluate DOM
+            # 🟢 CHỐT HẠ: Lấy HTML và In ra nếu không có kết quả
             results = await page.evaluate('''
                 () => {
                     const items = [];
                     const elements = document.querySelectorAll('.gsc-webResult, .gs-webResult');
-                    console.log(`Found ${elements.length} elements in DOM`);
                     
                     elements.forEach(el => {
                         let link = '';
@@ -151,9 +141,15 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 }
             ''')
             
+            # 🚨 Nếu không có kết quả, in toàn bộ HTML ra Log để debug
+            if len(results) == 0:
+                print("⚠️ DEBUG: 0 RESULTS FOUND. DUMPING HTML PAGE CONTENT BELOW:")
+                html_content = await page.content()
+                print(html_content[:3000]) # In 3000 ký tự đầu để đọc được ngay trên Log
+                print("⚠️ DEBUG: END OF HTML DUMP")
+            
             await browser.close()
             
-            # Lọc trùng lặp
             seen_links = set()
             unique_results = []
             for item in results:
@@ -179,9 +175,7 @@ def transform_to_brave_format(query: str, web_results: List[Dict], offset: int =
         "bad_results": False, "should_fallback": False, "postal_code": "", "city": "",
         "header_country": "", "more_results_available": len(web_results) >= 20, "state": ""
     }
-
     mixed_main = [{"type": "web", "index": idx, "all": False} for idx in range(len(web_results))]
-
     brave_web_results = []
     for r in web_results:
         brave_web_results.append({
@@ -194,13 +188,9 @@ def transform_to_brave_format(query: str, web_results: List[Dict], offset: int =
             },
             "language": "en", "family_friendly": True, "type": "search_result",
             "subtype": "generic", "is_live": False,
-            "meta_url": {
-                "scheme": "https", "netloc": r.get("display_url", ""),
-                "hostname": r.get("display_url", ""), "favicon": None, "path": ""
-            },
+            "meta_url": {"scheme": "https", "netloc": r.get("display_url", ""), "hostname": r.get("display_url", ""), "favicon": None, "path": ""},
             "thumbnail": None, "age": None, "deep_results": None
         })
-
     brave_web = {"type": "search", "results": brave_web_results, "family_friendly": True}
     return {
         "type": "search", "query": brave_query,
@@ -214,11 +204,7 @@ async def root():
     return {"message": "Google CSE Search API", "endpoints": {"/search?q=query": "Tìm kiếm"}}
 
 @app.get("/search")
-async def search(
-    q: str = Query(..., description="Từ khóa tìm kiếm"),
-    cx: str = Query(CX, description="Search Engine ID"),
-    offset: int = Query(0, description="Trang kết quả")
-):
+async def search(q: str = Query(..., description="Từ khóa tìm kiếm"), cx: str = Query(CX, description="Search Engine ID"), offset: int = Query(0, description="Trang kết quả")):
     try:
         raw_results = await fetch_google_cse(q, cx, offset)
         return JSONResponse(transform_to_brave_format(q, raw_results, offset))

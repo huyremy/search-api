@@ -21,7 +21,7 @@ app.add_middleware(
 # Cache
 cache: Dict[str, Dict] = {}
 CACHE_TTL = 7200  # 🟢 Tăng lên 2 tiếng (7200 giây) để giảm tải IP
-CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")
+CX = os.getenv("GOOGLE_CX", "f671574fa55cc44e6")
 
 # --- GIỮ NGUYÊN PHẦN PLAYWRIGHT CỦA BẠN ---
 async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Dict]:

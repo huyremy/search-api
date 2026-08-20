@@ -41,8 +41,10 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--single-process'
-                ]
+                ],
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
+            
             page = await browser.new_page()
             await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle")
             

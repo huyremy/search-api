@@ -48,10 +48,9 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                     '--disable-gpu',
                     '--single-process'
                 ]
-                # 🟢 Đã xóa dòng user_agent ở đây
             )
             
-            # 🟢 CHUYỂN SANG BƯỚC NEW PAGE: User-Agent được đặt ở đây mới đúng
+            # 🟢 User-Agent đặt ở đây mới đúng
             page = await browser.new_page(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -67,18 +66,33 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 await page.fill(".gsc-input input", query)
                 
                 search_clicked = False
+                
+                # 🟢 CÁCH 1: Thử click nút Search (Có thể class đã đổi)
                 try:
-                    print("   - Trying to click Search button...")
-                    await page.click(".gsc-search-button-v2 button")
+                    print("   - Trying to click Search button (gsc-search-button-v2)...")
+                    await page.click(".gsc-search-button-v2 button", timeout=5000)
                     search_clicked = True
-                    print("   - Search button clicked successfully.")
+                    print("   - Search button clicked successfully (v2).")
                 except Exception as click_err:
-                    print(f"   ⚠️ Click button failed: {click_err}")
+                    print(f"   ⚠️ Failed v2: {click_err}")
                     pass
                 
+                # 🟢 CÁCH 2: Nếu cách 1 thất bại, thử nút Search với class cũ hơn
+                if not search_clicked:
+                    try:
+                        print("   - Trying to click Search button (gsc-search-button)...")
+                        await page.click(".gsc-search-button button", timeout=5000)
+                        search_clicked = True
+                        print("   - Search button clicked successfully (old).")
+                    except Exception as click_err2:
+                        print(f"   ⚠️ Failed old: {click_err2}")
+                        pass
+                
+                # 🟢 CÁCH 3: Nếu tất cả thất bại, dùng phím Enter
                 if not search_clicked:
                     print("   - Trying to press Enter key instead...")
                     await page.press(".gsc-input input", "Enter")
+                    
             except Exception as e:
                 print(f"❌ DEBUG LỖI NGHIÊM TRỌNG 1: Search input error! {e}")
                 await browser.close()
@@ -107,7 +121,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                 print("   ✅ Found result selector! DOM is ready.")
             except Exception as e:
                 print(f"⚠️ DEBUG LỖI 2: Timeout waiting for results. DOM may be empty or Google blocked us. Error: {e}")
-                # Không return [] ở đây để vẫn tiếp tục evaluate, có thể DOM rỗng
 
             print("   - Evaluating DOM to extract results...")
             results = await page.evaluate('''
@@ -161,7 +174,6 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
             
             await browser.close()
             
-            # 🟢 LỌC BỎ KẾT QUẢ TRÙNG LẶP TRƯỚC KHI LƯU CACHE
             print(f"   - Raw results count before filtering: {len(results)}")
             seen_links = set()
             unique_results = []

@@ -26,7 +26,6 @@ CX = os.getenv("GOOGLE_CX", "83dfe6525b5214c76")
 async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Dict]:
     cache_key = f"{query}_{cx}_{offset}"
     
-    # 🟢 DEBUG 1: Kiểm tra cache
     if cache_key in cache:
         cached_data = cache[cache_key]
         if time.time() - cached_data["timestamp"] < CACHE_TTL:
@@ -48,11 +47,15 @@ async def fetch_google_cse(query: str, cx: str = CX, offset: int = 0) -> List[Di
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--single-process'
-                ],
+                ]
+                # 🟢 Đã xóa dòng user_agent ở đây
+            )
+            
+            # 🟢 CHUYỂN SANG BƯỚC NEW PAGE: User-Agent được đặt ở đây mới đúng
+            page = await browser.new_page(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             
-            page = await browser.new_page()
             print(f"   - Navigating to Google CSE (cx: {cx})...")
             await page.goto(f"https://cse.google.com/cse?cx={cx}", wait_until="networkidle")
             
